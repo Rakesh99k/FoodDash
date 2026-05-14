@@ -13,11 +13,14 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "deliveries")
@@ -52,6 +55,16 @@ public class Delivery {
 	@Column(name = "delivered_at")
 	private Instant deliveredAt;
 
+	@Column(name = "eta_at")
+	private Instant etaAt;
+
+	@Column(name = "delivery_notes", columnDefinition = "TEXT")
+	private String deliveryNotes;
+
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "tracking_data", nullable = false)
+	private Map<String, Object> trackingData;
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private Instant createdAt;
 
@@ -65,6 +78,9 @@ public class Delivery {
 		this.updatedAt = now;
 		if (this.status == null) {
 			this.status = "assigned";
+		}
+		if (this.trackingData == null) {
+			this.trackingData = Map.of();
 		}
 	}
 
