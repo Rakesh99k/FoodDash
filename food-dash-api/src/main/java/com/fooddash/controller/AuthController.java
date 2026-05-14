@@ -7,9 +7,11 @@ import com.fooddash.dto.RegisterRequest;
 import com.fooddash.dto.UserResponse;
 import com.fooddash.service.AuthService;
 import jakarta.validation.Valid;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,5 +34,12 @@ public class AuthController {
 	public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
 		LoginResponse loginResponse = authService.login(request);
 		return ResponseEntity.ok(ApiResponse.success("Login successful", loginResponse));
+	}
+
+	@PostMapping("/logout")
+	public ResponseEntity<ApiResponse<Map<String, String>>> logout(
+			@RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
+		authService.logout(authorizationHeader);
+		return ResponseEntity.ok(ApiResponse.success("Logout successful", Map.of("result", "ok")));
 	}
 }
