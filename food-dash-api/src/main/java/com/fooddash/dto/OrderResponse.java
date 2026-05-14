@@ -1,6 +1,7 @@
 package com.fooddash.dto;
 
 import com.fooddash.model.OrderStatus;
+import com.fooddash.model.PaymentStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -31,5 +32,7 @@ public class OrderResponse {
     private Instant placedAt;
     private Instant createdAt;
     private Instant updatedAt;
+    private Long paymentId;
+    private PaymentStatus paymentStatus;
     private List<OrderItemResponse> items;
 }
