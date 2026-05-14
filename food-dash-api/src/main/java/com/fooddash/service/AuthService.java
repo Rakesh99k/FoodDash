@@ -12,6 +12,7 @@ import com.fooddash.repository.UserRepository;
 import com.fooddash.util.JwtService;
 import com.fooddash.util.UserMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,6 +29,8 @@ public class AuthService {
 	private final PasswordEncoder passwordEncoder;
 	private final JwtService jwtService;
 	private final CustomUserDetailsService customUserDetailsService;
+	private final AuthenticatedUserService authenticatedUserService;
+	private final TokenBlacklistService tokenBlacklistService;
 
 	@Transactional
 	public UserResponse register(RegisterRequest request) {
@@ -73,5 +76,17 @@ public class AuthService {
 				.refreshToken(refreshToken)
 				.user(UserMapper.toResponse(user))
 				.build();
+	}
+
+	@Transactional
+	public void logout(String authorizationHeader) {
+		User currentUser = authenticatedUserService.getCurrentUser();
+		refreshTokenRepository.deleteAllByUser_Id(currentUser.getId());
+
+		if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+			throw new AuthorizationDeniedException("Missing bearer token");
+		}
+		String accessToken = authorizationHeader.substring(7);
+		tokenBlacklistService.blacklistToken(accessToken, jwtService.extractExpiration(accessToken));
 	}
 }
