@@ -1,6 +1,7 @@
 package com.fooddash.config;
 
 import com.fooddash.service.CustomUserDetailsService;
+import com.fooddash.service.TokenBlacklistService;
 import com.fooddash.util.JwtService;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
@@ -22,6 +23,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
 	private final JwtService jwtService;
 	private final CustomUserDetailsService customUserDetailsService;
+	private final TokenBlacklistService tokenBlacklistService;
 
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -33,6 +35,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 		}
 
 		String token = authHeader.substring(7);
+		if (tokenBlacklistService.isBlacklisted(token)) {
+			SecurityContextHolder.clearContext();
+			filterChain.doFilter(request, response);
+			return;
+		}
 		try {
 			String email = jwtService.extractEmail(token);
 			if (email != null
