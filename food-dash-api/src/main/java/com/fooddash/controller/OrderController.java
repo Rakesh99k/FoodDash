@@ -4,14 +4,12 @@ import com.fooddash.dto.ApiResponse;
 import com.fooddash.dto.OrderCreateRequest;
 import com.fooddash.dto.OrderResponse;
 import com.fooddash.dto.OrderStatusUpdateRequest;
-import com.fooddash.model.User;
 import com.fooddash.service.OrderService;
 import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,34 +26,29 @@ public class OrderController {
     private final OrderService orderService;
 
     @PostMapping
-    public ResponseEntity<ApiResponse<OrderResponse>> createOrder(
-            @AuthenticationPrincipal User user,
-            @Valid @RequestBody OrderCreateRequest request) {
-        OrderResponse response = orderService.createOrder(user, request);
+    public ResponseEntity<ApiResponse<OrderResponse>> createOrder(@Valid @RequestBody OrderCreateRequest request) {
+        OrderResponse response = orderService.createOrder(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Order placed successfully", response));
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<OrderResponse>>> getOrders(@AuthenticationPrincipal User user) {
-        List<OrderResponse> responses = orderService.getOrdersForUser(user);
+    public ResponseEntity<ApiResponse<List<OrderResponse>>> getOrders() {
+        List<OrderResponse> responses = orderService.getOrdersForUser();
         return ResponseEntity.ok(ApiResponse.success("Orders retrieved successfully", responses));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<OrderResponse>> getOrderDetails(
-            @PathVariable Long id,
-            @AuthenticationPrincipal User user) {
-        OrderResponse response = orderService.getOrderDetails(id, user);
+    public ResponseEntity<ApiResponse<OrderResponse>> getOrderDetails(@PathVariable Long id) {
+        OrderResponse response = orderService.getOrderDetails(id);
         return ResponseEntity.ok(ApiResponse.success("Order details retrieved", response));
     }
 
     @PatchMapping("/{id}/status")
     public ResponseEntity<ApiResponse<OrderResponse>> updateOrderStatus(
             @PathVariable Long id,
-            @AuthenticationPrincipal User user,
             @Valid @RequestBody OrderStatusUpdateRequest request) {
-        OrderResponse response = orderService.updateOrderStatus(id, request, user);
+        OrderResponse response = orderService.updateOrderStatus(id, request);
         return ResponseEntity.ok(ApiResponse.success("Order status updated successfully", response));
     }
 }
