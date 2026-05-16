@@ -10,12 +10,14 @@ import com.fooddash.model.FoodOrder;
 import com.fooddash.model.MenuItem;
 import com.fooddash.model.OrderItem;
 import com.fooddash.model.OrderStatus;
+import com.fooddash.model.Payment;
 import com.fooddash.model.Restaurant;
 import com.fooddash.model.Role;
 import com.fooddash.model.User;
 import com.fooddash.repository.FoodOrderRepository;
 import com.fooddash.repository.MenuItemRepository;
 import com.fooddash.repository.OrderItemRepository;
+import com.fooddash.repository.PaymentRepository;
 import com.fooddash.repository.RestaurantRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -24,7 +26,6 @@ import java.util.List;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,11 +38,16 @@ public class OrderServiceImpl implements OrderService {
     private final OrderItemRepository orderItemRepository;
     private final RestaurantRepository restaurantRepository;
     private final MenuItemRepository menuItemRepository;
+    private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
+    private final AuthenticatedUserService authenticatedUserService;
+    private final OwnershipAuthorizationService ownershipAuthorizationService;
+    private final OrderStateMachineService orderStateMachineService;
 
     @Override
     @Transactional
-    public OrderResponse createOrder(User user, OrderCreateRequest request) {
+    public OrderResponse createOrder(OrderCreateRequest request) {
+        User user = authenticatedUserService.getCurrentUser();
         Restaurant restaurant = restaurantRepository.findById(request.getRestaurantId())
                 .orElseThrow(() -> new ResourceNotFoundException("Restaurant not found"));
 
@@ -97,7 +103,8 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<OrderResponse> getOrdersForUser(User user) {
+    public List<OrderResponse> getOrdersForUser() {
+        User user = authenticatedUserService.getCurrentUser();
         List<FoodOrder> orders = new ArrayList<>();
         if (user.getRole() == Role.CUSTOMER) {
             orders = foodOrderRepository.findByCustomerIdOrderByCreatedAtDesc(user.getId());
@@ -120,48 +127,41 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional(readOnly = true)
-    public OrderResponse getOrderDetails(Long orderId, User user) {
+    public OrderResponse getOrderDetails(Long orderId) {
+        User user = authenticatedUserService.getCurrentUser();
         FoodOrder order = foodOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
-        checkAuthorization(order, user);
+        ownershipAuthorizationService.assertCanViewOrder(user, order);
         return mapToResponse(order, orderItemRepository.findByOrderId(orderId));
     }
 
     @Override
     @Transactional
-    public OrderResponse updateOrderStatus(Long orderId, OrderStatusUpdateRequest request, User user) {
+    public OrderResponse updateOrderStatus(Long orderId, OrderStatusUpdateRequest request) {
+        User user = authenticatedUserService.getCurrentUser();
         FoodOrder order = foodOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
-        checkAuthorization(order, user);
+        if (user.getRole() != Role.ADMIN && user.getRole() != Role.DELIVERY_PERSON) {
+            ownershipAuthorizationService.assertCanViewOrder(user, order);
+        }
+        if (user.getRole() == Role.DELIVERY_PERSON) {
+            if (order.getDeliveryPerson() != null && !order.getDeliveryPerson().getId().equals(user.getId())) {
+                throw new org.springframework.security.authorization.AuthorizationDeniedException(
+                        "Order is assigned to another delivery person");
+            }
+        }
 
         OrderStatus currentStatus = order.getStatus();
         OrderStatus newStatus = request.getStatus();
 
-        // Business Rules Validate
-        if (user.getRole() == Role.CUSTOMER) {
-            if (newStatus != OrderStatus.CANCELLED) {
-                throw new AuthorizationDeniedException("Customers can only update status to canceled");
-            }
-            if (currentStatus != OrderStatus.PENDING && currentStatus != OrderStatus.CONFIRMED) {
-                throw new IllegalArgumentException("Cannot cancel order in status: " + currentStatus);
-            }
-        } else if (user.getRole() == Role.RESTAURANT_OWNER) {
-            if (newStatus != OrderStatus.CONFIRMED && newStatus != OrderStatus.PREPARING
-                    && newStatus != OrderStatus.READY_FOR_PICKUP && newStatus != OrderStatus.CANCELLED) {
-                throw new AuthorizationDeniedException("Invalid status update for restaurant owner");
-            }
-        } else if (user.getRole() == Role.DELIVERY_PERSON) {
-            if (newStatus != OrderStatus.OUT_FOR_DELIVERY && newStatus != OrderStatus.DELIVERED) {
-                throw new AuthorizationDeniedException("Invalid status update for delivery person");
-            }
-            if (order.getDeliveryPerson() == null) {
-                // For simplicity, first delivery person to update it assigs themselves to it if
-                // it was READY_FOR_PICKUP
-                order.setDeliveryPerson(user);
-            } else if (!order.getDeliveryPerson().getId().equals(user.getId())) {
-                throw new AuthorizationDeniedException("Order is assigned to another delivery person");
-            }
+        orderStateMachineService.assertRoleCanTransition(user.getRole(), currentStatus, newStatus);
+        orderStateMachineService.assertTransitionAllowed(currentStatus, newStatus);
+
+        if (user.getRole() == Role.DELIVERY_PERSON
+                && newStatus == OrderStatus.OUT_FOR_DELIVERY
+                && order.getDeliveryPerson() == null) {
+            order.setDeliveryPerson(user);
         }
 
         order.setStatus(newStatus);
@@ -170,23 +170,6 @@ public class OrderServiceImpl implements OrderService {
         notificationService.notifyCustomerOfOrderStatusChange(savedOrder);
 
         return mapToResponse(savedOrder, orderItemRepository.findByOrderId(orderId));
-    }
-
-    private void checkAuthorization(FoodOrder order, User user) {
-        if (user.getRole() == Role.ADMIN)
-            return;
-
-        if (user.getRole() == Role.CUSTOMER && !order.getCustomer().getId().equals(user.getId())) {
-            throw new AuthorizationDeniedException("Not authorized to view this order");
-        }
-        if (user.getRole() == Role.RESTAURANT_OWNER && !order.getRestaurant().getOwner().getId().equals(user.getId())) {
-            throw new AuthorizationDeniedException("Not authorized to view this order");
-        }
-        if (user.getRole() == Role.DELIVERY_PERSON) {
-            if (order.getDeliveryPerson() != null && !order.getDeliveryPerson().getId().equals(user.getId())) {
-                throw new AuthorizationDeniedException("Order assigned to another delivery person");
-            }
-        }
     }
 
     private OrderResponse mapToResponseQuick(FoodOrder order) {
@@ -204,6 +187,8 @@ public class OrderServiceImpl implements OrderService {
                 .specialInstructions(i.getSpecialInstructions())
                 .build()).collect(Collectors.toList());
 
+        Payment payment = paymentRepository.findTopByOrderIdOrderByCreatedAtDesc(order.getId()).orElse(null);
+
         return OrderResponse.builder()
                 .id(order.getId())
                 .customerId(order.getCustomer().getId())
@@ -220,6 +205,8 @@ public class OrderServiceImpl implements OrderService {
                 .placedAt(order.getPlacedAt())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
+                .paymentId(payment == null ? null : payment.getId())
+                .paymentStatus(payment == null ? null : payment.getStatus())
                 .items(itemResponses)
                 .build();
     }
