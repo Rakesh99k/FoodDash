@@ -40,6 +40,8 @@ public class SecurityConfig {
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/api/v1/auth/**")
 								.permitAll()
+								.requestMatchers("/api/v1/payments/webhooks/**")
+								.permitAll()
 								.requestMatchers(HttpMethod.GET, "/api/v1/restaurants/**")
 								.permitAll()
 								.anyRequest()
