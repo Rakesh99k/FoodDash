@@ -16,12 +16,12 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.authorization.AuthorizationDeniedException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,9 +31,13 @@ public class RestaurantService {
 
 	private final RestaurantRepository restaurantRepository;
 	private final UserRepository userRepository;
-	private final CustomUserDetailsService customUserDetailsService;
+	private final AuthenticatedUserService authenticatedUserService;
+	private final OwnershipAuthorizationService ownershipAuthorizationService;
 
 	@Transactional(readOnly = true)
+	@Cacheable(
+			cacheNames = "restaurantCache",
+			key = "'list:' + (#cuisine == null ? '' : #cuisine.trim().toLowerCase()) + ':' + (#latitude == null ? 'na' : #latitude) + ':' + (#longitude == null ? 'na' : #longitude) + ':' + (#radiusKm == null ? 'na' : #radiusKm) + ':' + #pageable.pageNumber + ':' + #pageable.pageSize")
 	public Page<RestaurantResponse> listPublicRestaurants(
 			@Nullable String cuisine, @Nullable Double latitude, @Nullable Double longitude, @Nullable Double radiusKm, Pageable pageable) {
 		List<Restaurant> base = cuisine == null || cuisine.isBlank()
@@ -55,6 +59,7 @@ public class RestaurantService {
 	}
 
 	@Transactional(readOnly = true)
+	@Cacheable(cacheNames = "restaurantCache", key = "'public:' + #id")
 	public RestaurantResponse getPublicRestaurantById(Long id) {
 		Restaurant restaurant = findRestaurant(id);
 		if (restaurant.getStatus() != RestaurantStatus.ACTIVE) {
@@ -64,8 +69,9 @@ public class RestaurantService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "restaurantCache", allEntries = true)
 	public RestaurantResponse createRestaurant(CreateRestaurantRequest request) {
-		User actor = getCurrentUser();
+		User actor = authenticatedUserService.getCurrentUser();
 		boolean admin = actor.getRole() == Role.ADMIN;
 		boolean owner = actor.getRole() == Role.RESTAURANT_OWNER;
 		if (!admin && !owner) {
@@ -98,10 +104,11 @@ public class RestaurantService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "restaurantCache", allEntries = true)
 	public RestaurantResponse updateRestaurant(Long id, UpdateRestaurantRequest request) {
-		User actor = getCurrentUser();
+		User actor = authenticatedUserService.getCurrentUser();
 		Restaurant restaurant = findRestaurant(id);
-		validateCanModify(actor, restaurant);
+		ownershipAuthorizationService.assertCanManageRestaurant(actor, restaurant);
 
 		if (actor.getRole() == Role.ADMIN && request.getOwnerId() != null) {
 			restaurant.setOwner(findUser(request.getOwnerId()));
@@ -122,8 +129,9 @@ public class RestaurantService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "restaurantCache", allEntries = true)
 	public RestaurantResponse softDeleteRestaurant(Long id) {
-		User actor = getCurrentUser();
+		User actor = authenticatedUserService.getCurrentUser();
 		if (actor.getRole() != Role.ADMIN) {
 			throw new AuthorizationDeniedException("Only admins can delete restaurants");
 		}
@@ -141,24 +149,6 @@ public class RestaurantService {
 
 	private User findUser(Long id) {
 		return userRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("User not found: " + id));
-	}
-
-	private User getCurrentUser() {
-		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-		if (authentication == null || !authentication.isAuthenticated()) {
-			throw new AuthorizationDeniedException("Unauthenticated");
-		}
-		return customUserDetailsService.loadDomainUserByEmail(authentication.getName());
-	}
-
-	private void validateCanModify(User actor, Restaurant restaurant) {
-		if (actor.getRole() == Role.ADMIN) {
-			return;
-		}
-		if (actor.getRole() == Role.RESTAURANT_OWNER && restaurant.getOwner().getId().equals(actor.getId())) {
-			return;
-		}
-		throw new AuthorizationDeniedException("Not allowed to modify this restaurant");
 	}
 
 	private boolean isWithinRadius(
