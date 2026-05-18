@@ -6,7 +6,6 @@ import com.fooddash.dto.UpdateMenuItemRequest;
 import com.fooddash.exception.ResourceNotFoundException;
 import com.fooddash.model.MenuItem;
 import com.fooddash.model.Restaurant;
-import com.fooddash.model.Role;
 import com.fooddash.model.User;
 import com.fooddash.repository.MenuItemRepository;
 import com.fooddash.repository.RestaurantRepository;
@@ -14,9 +13,8 @@ import com.fooddash.util.MenuItemMapper;
 import jakarta.annotation.Nullable;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.authorization.AuthorizationDeniedException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,9 +24,13 @@ public class MenuItemService {
 
 	private final MenuItemRepository menuItemRepository;
 	private final RestaurantRepository restaurantRepository;
-	private final CustomUserDetailsService customUserDetailsService;
+	private final AuthenticatedUserService authenticatedUserService;
+	private final OwnershipAuthorizationService ownershipAuthorizationService;
 
 	@Transactional(readOnly = true)
+	@Cacheable(
+			cacheNames = "menuCache",
+			key = "'menu:' + #restaurantId + ':' + (#category == null ? '' : #category.trim().toLowerCase()) + ':' + (#available == null ? 'na' : #available)")
 	public List<MenuItemResponse> listMenuItems(Long restaurantId, @Nullable String category, @Nullable Boolean available) {
 		Restaurant restaurant = findRestaurant(restaurantId);
 		List<MenuItem> menuItems;
@@ -53,10 +55,11 @@ public class MenuItemService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "menuCache", allEntries = true)
 	public MenuItemResponse createMenuItem(Long restaurantId, CreateMenuItemRequest request) {
 		Restaurant restaurant = findRestaurant(restaurantId);
-		User actor = getCurrentUser();
-		validateCanModify(actor, restaurant);
+		User actor = authenticatedUserService.getCurrentUser();
+		ownershipAuthorizationService.assertCanManageRestaurant(actor, restaurant);
 
 		MenuItem menuItem = MenuItem.builder()
 				.restaurant(restaurant)
@@ -72,10 +75,11 @@ public class MenuItemService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "menuCache", allEntries = true)
 	public MenuItemResponse updateMenuItem(Long itemId, UpdateMenuItemRequest request) {
 		MenuItem menuItem = findMenuItem(itemId);
-		User actor = getCurrentUser();
-		validateCanModify(actor, menuItem.getRestaurant());
+		User actor = authenticatedUserService.getCurrentUser();
+		ownershipAuthorizationService.assertCanManageRestaurant(actor, menuItem.getRestaurant());
 
 		menuItem.setName(request.getName().trim());
 		menuItem.setDescription(trimOrNull(request.getDescription()));
@@ -88,10 +92,11 @@ public class MenuItemService {
 	}
 
 	@Transactional
+	@CacheEvict(cacheNames = "menuCache", allEntries = true)
 	public MenuItemResponse softDeleteMenuItem(Long itemId) {
 		MenuItem menuItem = findMenuItem(itemId);
-		User actor = getCurrentUser();
-		validateCanModify(actor, menuItem.getRestaurant());
+		User actor = authenticatedUserService.getCurrentUser();
+		ownershipAuthorizationService.assertCanManageRestaurant(actor, menuItem.getRestaurant());
 
 		menuItem.setAvailable(false);
 		return MenuItemMapper.toResponse(menuItemRepository.save(menuItem));
@@ -105,24 +110,6 @@ public class MenuItemService {
 	private Restaurant findRestaurant(Long restaurantId) {
 		return restaurantRepository.findByIdAndDeletedFalse(restaurantId)
 				.orElseThrow(() -> new ResourceNotFoundException("Restaurant not found: " + restaurantId));
-	}
-
-	private User getCurrentUser() {
-		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-		if (authentication == null || !authentication.isAuthenticated()) {
-			throw new AuthorizationDeniedException("Unauthenticated");
-		}
-		return customUserDetailsService.loadDomainUserByEmail(authentication.getName());
-	}
-
-	private void validateCanModify(User actor, Restaurant restaurant) {
-		if (actor.getRole() == Role.ADMIN) {
-			return;
-		}
-		if (actor.getRole() == Role.RESTAURANT_OWNER && restaurant.getOwner().getId().equals(actor.getId())) {
-			return;
-		}
-		throw new AuthorizationDeniedException("Only restaurant owner or admin can modify menu items");
 	}
 
 	private String trimOrNull(String value) {
