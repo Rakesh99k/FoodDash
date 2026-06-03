@@ -9,7 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -52,6 +52,11 @@ public class GlobalExceptionHandler {
 		return ResponseEntity.badRequest().body(ApiResponse.error(ex.getMessage(), null));
 	}
 
+	@ExceptionHandler(IllegalStateException.class)
+	public ResponseEntity<ApiResponse<Object>> handleIllegalState(IllegalStateException ex) {
+		return ResponseEntity.badRequest().body(ApiResponse.error(ex.getMessage(), null));
+	}
+
 	@ExceptionHandler(DataIntegrityViolationException.class)
 	public ResponseEntity<ApiResponse<Object>> handleDataIntegrityViolationException(DataIntegrityViolationException ex) {
 		return ResponseEntity.badRequest().body(ApiResponse.error("Data integrity violation", null));
@@ -62,8 +67,8 @@ public class GlobalExceptionHandler {
 		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Invalid credentials", null));
 	}
 
-	@ExceptionHandler(AuthorizationDeniedException.class)
-	public ResponseEntity<ApiResponse<Object>> handleAuthorizationDeniedException(AuthorizationDeniedException ex) {
+	@ExceptionHandler(AccessDeniedException.class)
+	public ResponseEntity<ApiResponse<Object>> handleAuthorizationDeniedException(AccessDeniedException ex) {
 		return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiResponse.error("Access denied", null));
 	}
 
