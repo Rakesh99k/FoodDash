@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.MDC;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -30,14 +31,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 			throws ServletException, IOException {
 		String authHeader = request.getHeader("Authorization");
 		if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-			filterChain.doFilter(request, response);
+			try {
+				filterChain.doFilter(request, response);
+			}
+			finally {
+				MDC.remove("userId");
+			}
 			return;
 		}
 
 		String token = authHeader.substring(7);
 		if (tokenBlacklistService.isBlacklisted(token)) {
 			SecurityContextHolder.clearContext();
-			filterChain.doFilter(request, response);
+			try {
+				filterChain.doFilter(request, response);
+			}
+			finally {
+				MDC.remove("userId");
+			}
 			return;
 		}
 		try {
@@ -51,6 +62,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 							userDetails, null, userDetails.getAuthorities());
 					authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 					SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+					Long userId = jwtService.extractUserId(token);
+					if (userId != null) {
+						MDC.put("userId", userId.toString());
+					}
 				}
 			}
 		}
@@ -58,6 +73,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 			SecurityContextHolder.clearContext();
 		}
 
-		filterChain.doFilter(request, response);
+		try {
+			filterChain.doFilter(request, response);
+		}
+		finally {
+			MDC.remove("userId");
+		}
 	}
 }
