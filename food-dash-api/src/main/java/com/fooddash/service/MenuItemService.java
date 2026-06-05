@@ -12,6 +12,7 @@ import com.fooddash.repository.RestaurantRepository;
 import com.fooddash.util.MenuItemMapper;
 import jakarta.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -26,6 +27,7 @@ public class MenuItemService {
 	private final RestaurantRepository restaurantRepository;
 	private final AuthenticatedUserService authenticatedUserService;
 	private final OwnershipAuthorizationService ownershipAuthorizationService;
+	private final AuditLogService auditLogService;
 
 	@Transactional(readOnly = true)
 	@Cacheable(
@@ -59,7 +61,7 @@ public class MenuItemService {
 	public MenuItemResponse createMenuItem(Long restaurantId, CreateMenuItemRequest request) {
 		Restaurant restaurant = findRestaurant(restaurantId);
 		User actor = authenticatedUserService.getCurrentUser();
-		ownershipAuthorizationService.assertCanManageRestaurant(actor, restaurant);
+		ownershipAuthorizationService.verifyRestaurantOwnership(actor, restaurant);
 
 		MenuItem menuItem = MenuItem.builder()
 				.restaurant(restaurant)
@@ -71,7 +73,12 @@ public class MenuItemService {
 				.available(request.getAvailable() == null || request.getAvailable())
 				.build();
 
-		return MenuItemMapper.toResponse(menuItemRepository.save(menuItem));
+		MenuItem saved = menuItemRepository.save(menuItem);
+		auditLogService.record(actor, "MENU_ITEM_CREATED", "MenuItem", saved.getId(), Map.of(
+				"restaurantId", restaurant.getId(),
+				"name", saved.getName(),
+				"available", saved.isAvailable()));
+		return MenuItemMapper.toResponse(saved);
 	}
 
 	@Transactional
@@ -79,7 +86,7 @@ public class MenuItemService {
 	public MenuItemResponse updateMenuItem(Long itemId, UpdateMenuItemRequest request) {
 		MenuItem menuItem = findMenuItem(itemId);
 		User actor = authenticatedUserService.getCurrentUser();
-		ownershipAuthorizationService.assertCanManageRestaurant(actor, menuItem.getRestaurant());
+		ownershipAuthorizationService.verifyMenuOwnership(actor, menuItem);
 
 		menuItem.setName(request.getName().trim());
 		menuItem.setDescription(trimOrNull(request.getDescription()));
@@ -88,7 +95,12 @@ public class MenuItemService {
 		menuItem.setImageUrl(trimOrNull(request.getImageUrl()));
 		menuItem.setAvailable(request.getAvailable());
 
-		return MenuItemMapper.toResponse(menuItemRepository.save(menuItem));
+		MenuItem saved = menuItemRepository.save(menuItem);
+		auditLogService.record(actor, "MENU_ITEM_UPDATED", "MenuItem", saved.getId(), Map.of(
+				"restaurantId", saved.getRestaurant().getId(),
+				"name", saved.getName(),
+				"available", saved.isAvailable()));
+		return MenuItemMapper.toResponse(saved);
 	}
 
 	@Transactional
@@ -96,10 +108,14 @@ public class MenuItemService {
 	public MenuItemResponse softDeleteMenuItem(Long itemId) {
 		MenuItem menuItem = findMenuItem(itemId);
 		User actor = authenticatedUserService.getCurrentUser();
-		ownershipAuthorizationService.assertCanManageRestaurant(actor, menuItem.getRestaurant());
+		ownershipAuthorizationService.verifyMenuOwnership(actor, menuItem);
 
 		menuItem.setAvailable(false);
-		return MenuItemMapper.toResponse(menuItemRepository.save(menuItem));
+		MenuItem saved = menuItemRepository.save(menuItem);
+		auditLogService.record(actor, "MENU_ITEM_DELETED", "MenuItem", saved.getId(), Map.of(
+				"restaurantId", saved.getRestaurant().getId(),
+				"available", saved.isAvailable()));
+		return MenuItemMapper.toResponse(saved);
 	}
 
 	private MenuItem findMenuItem(Long itemId) {
