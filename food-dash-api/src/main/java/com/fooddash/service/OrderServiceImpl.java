@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +41,7 @@ public class OrderServiceImpl implements OrderService {
     private final MenuItemRepository menuItemRepository;
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
+    private final AuditLogService auditLogService;
     private final AuthenticatedUserService authenticatedUserService;
     private final OwnershipAuthorizationService ownershipAuthorizationService;
     private final OrderStateMachineService orderStateMachineService;
@@ -96,7 +98,11 @@ public class OrderServiceImpl implements OrderService {
         FoodOrder savedOrder = foodOrderRepository.save(order);
         List<OrderItem> savedItems = orderItemRepository.saveAll(orderItems);
 
-        notificationService.notifyRestaurantOfNewOrder(savedOrder);
+        notificationService.notifyOrderPlaced(savedOrder);
+        auditLogService.record(user, "ORDER_CREATED", "FoodOrder", savedOrder.getId(), Map.of(
+                "restaurantId", restaurant.getId(),
+                "totalAmount", savedOrder.getTotalAmount(),
+                "itemCount", savedItems.size()));
 
         return mapToResponse(savedOrder, savedItems);
     }
@@ -131,7 +137,7 @@ public class OrderServiceImpl implements OrderService {
         User user = authenticatedUserService.getCurrentUser();
         FoodOrder order = foodOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
-        ownershipAuthorizationService.assertCanViewOrder(user, order);
+        ownershipAuthorizationService.verifyOrderAccess(user, order);
         return mapToResponse(order, orderItemRepository.findByOrderId(orderId));
     }
 
@@ -142,21 +148,9 @@ public class OrderServiceImpl implements OrderService {
         FoodOrder order = foodOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
-        if (user.getRole() != Role.ADMIN && user.getRole() != Role.DELIVERY_PERSON) {
-            ownershipAuthorizationService.assertCanViewOrder(user, order);
-        }
-        if (user.getRole() == Role.DELIVERY_PERSON) {
-            if (order.getDeliveryPerson() != null && !order.getDeliveryPerson().getId().equals(user.getId())) {
-                throw new org.springframework.security.authorization.AuthorizationDeniedException(
-                        "Order is assigned to another delivery person");
-            }
-        }
+        ownershipAuthorizationService.verifyOrderAccess(user, order);
 
-        OrderStatus currentStatus = order.getStatus();
         OrderStatus newStatus = request.getStatus();
-
-        orderStateMachineService.assertRoleCanTransition(user.getRole(), currentStatus, newStatus);
-        orderStateMachineService.assertTransitionAllowed(currentStatus, newStatus);
 
         if (user.getRole() == Role.DELIVERY_PERSON
                 && newStatus == OrderStatus.OUT_FOR_DELIVERY
@@ -164,10 +158,13 @@ public class OrderServiceImpl implements OrderService {
             order.setDeliveryPerson(user);
         }
 
-        order.setStatus(newStatus);
+        orderStateMachineService.transitionOrderStatus(order, user.getRole(), newStatus);
         FoodOrder savedOrder = foodOrderRepository.save(order);
 
         notificationService.notifyCustomerOfOrderStatusChange(savedOrder);
+        auditLogService.record(user, "ORDER_STATUS_UPDATED", "FoodOrder", savedOrder.getId(), Map.of(
+                "status", savedOrder.getStatus().name(),
+                "deliveryPersonId", savedOrder.getDeliveryPerson() == null ? null : savedOrder.getDeliveryPerson().getId()));
 
         return mapToResponse(savedOrder, orderItemRepository.findByOrderId(orderId));
     }
