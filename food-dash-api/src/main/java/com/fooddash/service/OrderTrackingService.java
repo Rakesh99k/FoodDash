@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,24 +43,17 @@ public class OrderTrackingService {
 		FoodOrder order = findOrder(orderId);
 
 		if (actor.getRole() != Role.ADMIN && actor.getRole() != Role.DELIVERY_PERSON) {
-			throw new AuthorizationDeniedException("Only delivery partners/admin can update tracking");
-		}
-		if (actor.getRole() == Role.DELIVERY_PERSON) {
-			if (order.getDeliveryPerson() == null) {
-				order.setDeliveryPerson(actor);
-				foodOrderRepository.save(order);
-			}
-			else if (!order.getDeliveryPerson().getId().equals(actor.getId())) {
-				throw new AuthorizationDeniedException("Order is assigned to another delivery partner");
-			}
+			throw new AccessDeniedException("Only delivery partners/admin can update tracking");
 		}
 
-		Delivery delivery = deliveryRepository.findByOrderId(orderId).orElseGet(() -> Delivery.builder()
-				.order(order)
-				.deliveryPerson(order.getDeliveryPerson())
-				.status("assigned")
-				.trackingData(Map.of())
-				.build());
+		Delivery delivery = deliveryRepository.findByOrderId(orderId)
+				.orElseThrow(() -> new AccessDeniedException("Delivery assignment required"));
+		if (actor.getRole() == Role.DELIVERY_PERSON) {
+			ownershipAuthorizationService.verifyDeliveryAccess(actor, delivery);
+		}
+		else {
+			ownershipAuthorizationService.verifyOrderAccess(actor, order);
+		}
 
 		Map<String, Object> tracking = new HashMap<>(delivery.getTrackingData() == null ? Map.of() : delivery.getTrackingData());
 		if (request.getLatitude() != null) {
@@ -75,7 +68,7 @@ public class OrderTrackingService {
 		tracking.put("updatedAt", Instant.now().toString());
 
 		delivery.setTrackingData(tracking);
-		delivery.setDeliveryPerson(order.getDeliveryPerson());
+		delivery.setDeliveryPerson(delivery.getDeliveryPerson() == null ? order.getDeliveryPerson() : delivery.getDeliveryPerson());
 		delivery.setEtaAt(request.getEtaAt() == null ? delivery.getEtaAt() : request.getEtaAt());
 
 		Delivery savedDelivery = deliveryRepository.save(delivery);
