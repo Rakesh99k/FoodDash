@@ -12,8 +12,10 @@ import com.fooddash.model.PaymentProvider;
 import com.fooddash.model.PaymentStatus;
 import com.fooddash.model.Role;
 import com.fooddash.model.User;
+import com.fooddash.model.WebhookEvent;
 import com.fooddash.repository.FoodOrderRepository;
 import com.fooddash.repository.PaymentRepository;
+import com.fooddash.repository.WebhookEventRepository;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -32,7 +34,8 @@ import javax.crypto.spec.SecretKeySpec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,9 +46,11 @@ public class PaymentService {
 
 	private final FoodOrderRepository foodOrderRepository;
 	private final PaymentRepository paymentRepository;
+	private final WebhookEventRepository webhookEventRepository;
 	private final AuthenticatedUserService authenticatedUserService;
 	private final OrderStateMachineService orderStateMachineService;
 	private final NotificationService notificationService;
+	private final AuditLogService auditLogService;
 
 	@Value("${payments.stripe.secret-key:}")
 	private String stripeSecretKey;
@@ -99,49 +104,62 @@ public class PaymentService {
 	@Transactional
 	public void handleStripeWebhook(String stripeSignatureHeader, String payload) {
 		if (!verifyStripeSignature(stripeSignatureHeader, payload)) {
-			throw new AuthorizationDeniedException("Invalid Stripe webhook signature");
+			throw new AccessDeniedException("Invalid Stripe webhook signature");
 		}
 
 		JsonNode root = parsePayload(payload);
 		String eventId = root.path("id").asText(null);
-		if (eventId != null && paymentRepository.existsByWebhookEventId(eventId)) {
+		String eventType = root.path("type").asText("");
+		WebhookEvent webhookEvent = registerWebhookEvent("stripe", eventId, eventType, payload);
+		if (webhookEvent == null) {
 			return;
 		}
-
-		String eventType = root.path("type").asText("");
 		JsonNode objectNode = root.path("data").path("object");
 		String providerPaymentId = objectNode.path("id").asText(null);
 
 		Payment payment = resolveStripePayment(root, objectNode, providerPaymentId);
 		if (payment == null) {
 			log.warn("Stripe webhook ignored because payment could not be mapped");
+			markWebhookEventProcessed(webhookEvent, "IGNORED");
 			return;
 		}
 
-		if ("payment_intent.succeeded".equals(eventType)) {
-			markPaymentPaid(payment, providerPaymentId, eventId, null);
+		try {
+			if ("payment_intent.succeeded".equals(eventType)) {
+				markPaymentPaid(payment, providerPaymentId, eventId, null);
+			}
+			else if ("payment_intent.payment_failed".equals(eventType)) {
+				String failure = objectNode.path("last_payment_error").path("message").asText(null);
+				markPaymentFailed(payment, providerPaymentId, eventId, failure);
+			}
+			else if ("payment_intent.requires_capture".equals(eventType)
+					|| "payment_intent.amount_capturable_updated".equals(eventType)) {
+				markPaymentAuthorized(payment, providerPaymentId, eventId);
+			}
+			markWebhookEventProcessed(webhookEvent, "PROCESSED");
+			auditLogService.recordSystem("WEBHOOK_STRIPE", "Payment", payment.getId(), Map.of(
+					"eventId", eventId,
+					"eventType", eventType,
+					"status", payment.getStatus().name()));
 		}
-		else if ("payment_intent.payment_failed".equals(eventType)) {
-			String failure = objectNode.path("last_payment_error").path("message").asText(null);
-			markPaymentFailed(payment, providerPaymentId, eventId, failure);
-		}
-		else if ("payment_intent.requires_capture".equals(eventType)
-				|| "payment_intent.amount_capturable_updated".equals(eventType)) {
-			markPaymentAuthorized(payment, providerPaymentId, eventId);
+		catch (RuntimeException ex) {
+			markWebhookEventProcessed(webhookEvent, "FAILED");
+			throw ex;
 		}
 	}
 
 	@Transactional
 	public void handleRazorpayWebhook(String signature, String eventId, String payload) {
 		if (!verifyRazorpaySignature(signature, payload)) {
-			throw new AuthorizationDeniedException("Invalid Razorpay webhook signature");
-		}
-		if (eventId != null && paymentRepository.existsByWebhookEventId(eventId)) {
-			return;
+			throw new AccessDeniedException("Invalid Razorpay webhook signature");
 		}
 
 		JsonNode root = parsePayload(payload);
 		String eventType = root.path("event").asText("");
+		WebhookEvent webhookEvent = registerWebhookEvent("razorpay", eventId, eventType, payload);
+		if (webhookEvent == null) {
+			return;
+		}
 		JsonNode paymentEntity = root.path("payload").path("payment").path("entity");
 		String providerPaymentId = paymentEntity.path("id").asText(null);
 		String providerOrderId = paymentEntity.path("order_id").asText(null);
@@ -152,18 +170,30 @@ public class PaymentService {
 				.orElse(null);
 		if (payment == null) {
 			log.warn("Razorpay webhook ignored because payment could not be mapped");
+			markWebhookEventProcessed(webhookEvent, "IGNORED");
 			return;
 		}
 
-		if ("payment.captured".equals(eventType) || "order.paid".equals(eventType)) {
-			markPaymentPaid(payment, providerPaymentId, eventId, providerOrderId);
+		try {
+			if ("payment.captured".equals(eventType) || "order.paid".equals(eventType)) {
+				markPaymentPaid(payment, providerPaymentId, eventId, providerOrderId);
+			}
+			else if ("payment.failed".equals(eventType)) {
+				String failure = paymentEntity.path("error_description").asText(null);
+				markPaymentFailed(payment, providerPaymentId, eventId, failure);
+			}
+			else if ("payment.authorized".equals(eventType)) {
+				markPaymentAuthorized(payment, providerPaymentId, eventId);
+			}
+			markWebhookEventProcessed(webhookEvent, "PROCESSED");
+			auditLogService.recordSystem("WEBHOOK_RAZORPAY", "Payment", payment.getId(), Map.of(
+					"eventId", eventId,
+					"eventType", eventType,
+					"status", payment.getStatus().name()));
 		}
-		else if ("payment.failed".equals(eventType)) {
-			String failure = paymentEntity.path("error_description").asText(null);
-			markPaymentFailed(payment, providerPaymentId, eventId, failure);
-		}
-		else if ("payment.authorized".equals(eventType)) {
-			markPaymentAuthorized(payment, providerPaymentId, eventId);
+		catch (RuntimeException ex) {
+			markWebhookEventProcessed(webhookEvent, "FAILED");
+			throw ex;
 		}
 	}
 
@@ -284,15 +314,18 @@ public class PaymentService {
 		payment.setPaidAt(Instant.now());
 		Payment saved = paymentRepository.save(payment);
 		syncOrderAfterPayment(saved);
+		notificationService.notifyPaymentCompleted(saved);
 	}
 
 	private void syncOrderAfterPayment(Payment payment) {
 		FoodOrder order = payment.getOrder();
 		if (order.getStatus() == OrderStatus.PENDING) {
-			orderStateMachineService.assertTransitionAllowed(order.getStatus(), OrderStatus.CONFIRMED);
-			order.setStatus(OrderStatus.CONFIRMED);
-			foodOrderRepository.save(order);
-			notificationService.notifyCustomerOfOrderStatusChange(order);
+			orderStateMachineService.transitionOrderStatus(order, Role.ADMIN, OrderStatus.CONFIRMED);
+			FoodOrder savedOrder = foodOrderRepository.save(order);
+			notificationService.notifyOrderConfirmed(savedOrder);
+			auditLogService.recordSystem("ORDER_CONFIRMED_AFTER_PAYMENT", "FoodOrder", savedOrder.getId(), Map.of(
+					"paymentId", payment.getId(),
+					"orderStatus", savedOrder.getStatus().name()));
 		}
 	}
 
@@ -303,7 +336,7 @@ public class PaymentService {
 		if (actor.getRole() == Role.CUSTOMER && order.getCustomer().getId().equals(actor.getId())) {
 			return;
 		}
-		throw new AuthorizationDeniedException("Only the order customer can initiate payment");
+		throw new AccessDeniedException("Only the order customer can initiate payment");
 	}
 
 	private FoodOrder findOrder(Long orderId) {
@@ -425,6 +458,48 @@ public class PaymentService {
 
 	private String urlEncode(String value) {
 		return URLEncoder.encode(value, StandardCharsets.UTF_8);
+	}
+
+	private WebhookEvent registerWebhookEvent(String provider, String eventId, String eventType, String payload) {
+		String normalizedEventId = eventId;
+		if (normalizedEventId == null || normalizedEventId.isBlank()) {
+			normalizedEventId = provider + ":" + eventType + ":" + sha256Hex(payload);
+		}
+
+		try {
+			WebhookEvent event = webhookEventRepository.saveAndFlush(WebhookEvent.builder()
+					.provider(provider)
+					.eventId(normalizedEventId)
+					.eventType(eventType)
+					.payload(payload)
+					.status("RECEIVED")
+					.build());
+			auditLogService.recordSystem("WEBHOOK_RECEIVED", "WebhookEvent", event.getId(), Map.of(
+					"provider", provider,
+					"eventId", normalizedEventId,
+					"eventType", eventType));
+			return event;
+		}
+		catch (DataIntegrityViolationException ex) {
+			return null;
+		}
+	}
+
+	private void markWebhookEventProcessed(WebhookEvent event, String status) {
+		event.setStatus(status);
+		event.setProcessedAt(Instant.now());
+		webhookEventRepository.save(event);
+	}
+
+	private String sha256Hex(String value) {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+			return toHex(hash);
+		}
+		catch (Exception ex) {
+			throw new IllegalArgumentException("Could not compute payload hash", ex);
+		}
 	}
 
 	private record ProviderPaymentInit(
