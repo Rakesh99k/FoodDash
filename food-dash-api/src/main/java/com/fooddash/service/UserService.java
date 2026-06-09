@@ -11,6 +11,7 @@ import com.fooddash.repository.RefreshTokenRepository;
 import com.fooddash.repository.UserRepository;
 import com.fooddash.util.UserMapper;
 import lombok.RequiredArgsConstructor;
+import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -25,6 +26,7 @@ public class UserService {
 	private final RefreshTokenRepository refreshTokenRepository;
 	private final PasswordEncoder passwordEncoder;
 	private final AuthenticatedUserService authenticatedUserService;
+	private final AuditLogService auditLogService;
 
 	@Transactional(readOnly = true)
 	public UserResponse getCurrentUserProfile() {
@@ -92,6 +94,10 @@ public class UserService {
 		if (!saved.isActive()) {
 			refreshTokenRepository.deleteAllByUser_Id(saved.getId());
 		}
+		auditLogService.record(getCurrentUser(), "USER_UPDATED_BY_ADMIN", "User", saved.getId(), Map.of(
+				"email", saved.getEmail(),
+				"role", saved.getRole().name(),
+				"active", saved.isActive()));
 		return UserMapper.toResponse(saved);
 	}
 
@@ -101,6 +107,9 @@ public class UserService {
 		user.setActive(false);
 		User saved = userRepository.save(user);
 		refreshTokenRepository.deleteAllByUser_Id(saved.getId());
+		auditLogService.record(getCurrentUser(), "USER_DEACTIVATED_BY_ADMIN", "User", saved.getId(), Map.of(
+				"email", saved.getEmail(),
+				"active", saved.isActive()));
 		return UserMapper.toResponse(saved);
 	}
 
