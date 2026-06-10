@@ -33,6 +33,7 @@ public class RestaurantService {
 	private final UserRepository userRepository;
 	private final AuthenticatedUserService authenticatedUserService;
 	private final OwnershipAuthorizationService ownershipAuthorizationService;
+	private final AuditLogService auditLogService;
 
 	@Transactional(readOnly = true)
 	@Cacheable(
@@ -100,7 +101,12 @@ public class RestaurantService {
 				.deleted(false)
 				.build();
 
-		return RestaurantMapper.toResponse(restaurantRepository.save(restaurant));
+		Restaurant saved = restaurantRepository.save(restaurant);
+		auditLogService.record(actor, "RESTAURANT_CREATED", "Restaurant", saved.getId(), Map.of(
+				"ownerId", saved.getOwner().getId(),
+				"name", saved.getName(),
+				"status", saved.getStatus().name()));
+		return RestaurantMapper.toResponse(saved);
 	}
 
 	@Transactional
@@ -108,7 +114,7 @@ public class RestaurantService {
 	public RestaurantResponse updateRestaurant(Long id, UpdateRestaurantRequest request) {
 		User actor = authenticatedUserService.getCurrentUser();
 		Restaurant restaurant = findRestaurant(id);
-		ownershipAuthorizationService.assertCanManageRestaurant(actor, restaurant);
+		ownershipAuthorizationService.verifyRestaurantOwnership(actor, restaurant);
 
 		if (actor.getRole() == Role.ADMIN && request.getOwnerId() != null) {
 			restaurant.setOwner(findUser(request.getOwnerId()));
@@ -125,7 +131,12 @@ public class RestaurantService {
 			restaurant.setStatus(request.getStatus());
 		}
 
-		return RestaurantMapper.toResponse(restaurantRepository.save(restaurant));
+		Restaurant saved = restaurantRepository.save(restaurant);
+		auditLogService.record(actor, "RESTAURANT_UPDATED", "Restaurant", saved.getId(), Map.of(
+				"name", saved.getName(),
+				"status", saved.getStatus().name(),
+				"ownerId", saved.getOwner().getId()));
+		return RestaurantMapper.toResponse(saved);
 	}
 
 	@Transactional
@@ -139,7 +150,11 @@ public class RestaurantService {
 		Restaurant restaurant = findRestaurant(id);
 		restaurant.setDeleted(true);
 		restaurant.setStatus(RestaurantStatus.CLOSED);
-		return RestaurantMapper.toResponse(restaurantRepository.save(restaurant));
+		Restaurant saved = restaurantRepository.save(restaurant);
+		auditLogService.record(actor, "RESTAURANT_DELETED", "Restaurant", saved.getId(), Map.of(
+				"deleted", true,
+				"status", saved.getStatus().name()));
+		return RestaurantMapper.toResponse(saved);
 	}
 
 	private Restaurant findRestaurant(Long id) {
