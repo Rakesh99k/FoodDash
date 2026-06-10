@@ -59,6 +59,19 @@ public class JwtService {
 		return email != null && email.equals(userDetails.getUsername()) && !isTokenExpired(token);
 	}
 
+	public Long extractUserId(String token) {
+		return extractClaim(token, claims -> {
+			Object uid = claims.get("uid");
+			if (uid instanceof Number number) {
+				return number.longValue();
+			}
+			if (uid == null) {
+				return null;
+			}
+			return Long.valueOf(uid.toString());
+		});
+	}
+
 	private boolean isTokenExpired(String token) {
 		return extractClaim(token, Claims::getExpiration).before(new Date());
 	}
