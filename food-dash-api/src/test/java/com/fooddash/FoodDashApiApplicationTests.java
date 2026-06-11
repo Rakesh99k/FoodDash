@@ -1,12 +1,9 @@
 package com.fooddash;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
+import com.fooddash.support.AbstractIntegrationTest;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class FoodDashApiApplicationTests {
+class FoodDashApiApplicationTests extends AbstractIntegrationTest {
 
 	@Test
 	void contextLoads() {
