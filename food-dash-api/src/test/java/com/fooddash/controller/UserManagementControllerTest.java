@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fooddash.support.AbstractIntegrationTest;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -12,16 +13,8 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.test.context.ActiveProfiles;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-class UserManagementControllerTest {
-
-	@LocalServerPort
-	private int port;
+class UserManagementControllerTest extends AbstractIntegrationTest {
 
 	@Test
 	void userCanViewUpdateProfileAndChangePassword() throws Exception {
