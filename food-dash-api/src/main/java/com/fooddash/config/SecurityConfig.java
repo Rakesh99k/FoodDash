@@ -1,6 +1,7 @@
 package com.fooddash.config;
 
 import com.fooddash.service.CustomUserDetailsService;
+import com.fooddash.filter.RequestCorrelationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +31,7 @@ import org.springframework.security.config.annotation.authentication.configurati
 public class SecurityConfig {
 
 	private final JwtAuthenticationFilter jwtAuthenticationFilter;
+	private final RequestCorrelationFilter requestCorrelationFilter;
 	private final CustomUserDetailsService customUserDetailsService;
 
 	@Bean
@@ -40,7 +42,11 @@ public class SecurityConfig {
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/api/v1/auth/**")
 								.permitAll()
+								.requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**")
+								.permitAll()
 								.requestMatchers("/api/v1/payments/webhooks/**")
+								.permitAll()
+								.requestMatchers("/ws", "/ws/**")
 								.permitAll()
 								.requestMatchers(HttpMethod.GET, "/api/v1/restaurants/**")
 								.permitAll()
@@ -49,6 +55,7 @@ public class SecurityConfig {
 				.authenticationProvider(authenticationProvider())
 				.exceptionHandling(exception -> exception.authenticationEntryPoint(authenticationEntryPoint())
 						.accessDeniedHandler(accessDeniedHandler()))
+				.addFilterBefore(requestCorrelationFilter, JwtAuthenticationFilter.class)
 				.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 		return http.build();
 	}
