@@ -7,7 +7,7 @@ import com.fooddash.model.OrderStatus;
 import com.fooddash.model.Role;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.security.access.AccessDeniedException;
 
 class OrderStateMachineServiceTest {
 
@@ -27,14 +27,14 @@ class OrderStateMachineServiceTest {
 	@Test
 	void blocksBackwardTransition() {
 		assertThrows(
-				IllegalArgumentException.class,
+				IllegalStateException.class,
 				() -> orderStateMachineService.assertTransitionAllowed(OrderStatus.DELIVERED, OrderStatus.PREPARING));
 	}
 
 	@Test
 	void customerCannotConfirmOrder() {
 		assertThrows(
-				AuthorizationDeniedException.class,
+				AccessDeniedException.class,
 				() -> orderStateMachineService.assertRoleCanTransition(
 						Role.CUSTOMER, OrderStatus.PENDING, OrderStatus.CONFIRMED));
 	}
