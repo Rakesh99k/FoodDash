@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: fooddash-postgres
+    environment:
+      POSTGRES_DB: food_dash
+      POSTGRES_USER: fooddash
+      POSTGRES_PASSWORD: fooddash
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fooddash -d food_dash"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fooddash-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fooddash-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:postgresql://postgres:5432/food_dash
+      DB_USERNAME: fooddash
+      DB_PASSWORD: fooddash
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: VGhpc0lzQVBsYWNlaG9sZGVyU2VjcmV0S2V5X01VU1RfQkVfUkVQTEFDRURfSU5fUFJPRA==
+      STRIPE_SECRET_KEY: ""
+      STRIPE_WEBHOOK_SECRET: ""
+      RAZORPAY_KEY_ID: ""
+      RAZORPAY_KEY_SECRET: ""
+      RAZORPAY_WEBHOOK_SECRET: ""
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
